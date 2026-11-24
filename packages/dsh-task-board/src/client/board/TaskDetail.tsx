@@ -216,7 +216,7 @@ function ExecutionSettingsSection({ controller, task, pending, executionOptions 
   const modelKnown = model === '' || models.some(item => item.id === model)
   // One line for the closed fold: which switches are on.
   const advancedOn: string[] = []
-  if (task.reuseSession === true) advancedOn.push(t('detail.settings.summary.reuseSession'))
+  if (task.reuseSession !== false) advancedOn.push(t('detail.settings.summary.reuseSession'))
   const advancedSummary = advancedOn.length === 0 ? t('detail.settings.summary.none') : advancedOn.join(' · ')
   return (
     <section className={css.detailSection}>
@@ -309,7 +309,7 @@ function ExecutionSettingsSection({ controller, task, pending, executionOptions 
         <label className={css.scheduleToggle} title={t('exec.reuseSessionHint')}>
           <input
             type="checkbox"
-            checked={task.reuseSession === true}
+            checked={task.reuseSession !== false}
             disabled={pending}
             onChange={event => { controller.updateTask(task.id, { reuseSession: event.target.checked }) }}
           />
@@ -861,7 +861,7 @@ export function TaskDetail({ controller, task, phase = 'open' }: { controller: B
         onSelect: () => { setShowEditTags(true) },
       })
     }
-    if (current.status === 'done' || current.status === 'failed') {
+    if (current.status === 'done' || current.status === 'review' || current.status === 'failed') {
       headerActions.push({
         key: 'archive',
         label: t('detail.archive'),

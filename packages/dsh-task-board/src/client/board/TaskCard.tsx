@@ -17,7 +17,7 @@
  * reference by the board, so the memo boundary is effective.
  */
 import { memo, useMemo } from 'react'
-import type { TaskRecord } from '../../core/tasks.ts'
+import { conversationRunning, conversationUnread, type TaskRecord } from '../../core/tasks.ts'
 import { executionLabel, hasOpenExecution, tagTone } from '../../core/tasks.ts'
 import { t } from '../locales.ts'
 import { useTaskBoardSeats } from '../seats.tsx'
@@ -209,6 +209,8 @@ function TaskCardInner({
       <IconSession size={12} />
     </span>
   ))
+  const live = conversationRunning(task)
+  const unread = conversationUnread(task)
   const decoration = <span className={css.cardDecoration}>{cardDecoration({ task })}</span>
   const timeLabel = <span className={css.cardTime} data-dsh-part="card-time">{t(timeline.key, { time: formatCardTime(timeline.at, timeZone) })}</span>
   const kindBadge = title.kind !== undefined && (
@@ -223,6 +225,8 @@ function TaskCardInner({
       data-compact={compact || undefined}
       data-dsh-part="card"
       data-pending={pending || undefined}
+      data-conversation={live ? 'running' : undefined}
+      data-unread={unread || undefined}
       draggable={isDraggable}
       onDragStart={isDraggable ? (event) => {
         event.dataTransfer.setData('text/plain', task.id)
@@ -244,6 +248,7 @@ function TaskCardInner({
       {compact ? (
         <span className={css.cardMeta}>
           {decoration}
+          {live && <span className={css.cardLive} data-dsh-part="card-live">{t('card.conversationLive')}</span>}
           {timeLabel}
           <span className={css.cardSpinnerSlot} aria-hidden="true">
             {!archived && (busy || pending) && <span className={css.cardSpinner} />}
@@ -293,6 +298,7 @@ function TaskCardInner({
                 {subtasksFailed === 0 && subtasksRunning > 0 ? ' · ' + t('card.subtasksRunning', { count: String(subtasksRunning) }) : ''}
               </span>
             )}
+            {live && <span className={css.cardLive} data-dsh-part="card-live">{t('card.conversationLive')}</span>}
             {timeLabel}
             {task.freeze !== undefined && (
               <span className={css.cardSchedule} title={task.freeze.goal}>{t('card.frozen')}</span>

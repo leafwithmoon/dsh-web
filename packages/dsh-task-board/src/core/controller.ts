@@ -12,7 +12,7 @@
  * owns only the orchestration seam (state, persistence, notify, navigation).
  */
 import type { TaskStore } from './store.ts'
-import { hasOpenExecution, withStatus, type NewTaskInput, type TaskRecord, type TaskStatus } from './tasks.ts'
+import { conversationUnread, hasOpenExecution, withStatus, type NewTaskInput, type TaskRecord, type TaskStatus } from './tasks.ts'
 import type { TaskAttachment, TaskAttachmentKind } from './attachment.ts'
 import { applyArchiveTask, applyRestoreTask } from './use-cases/task-archive.ts'
 import { applyCreateTask } from './use-cases/task-create.ts'
@@ -241,6 +241,12 @@ export class BoardController {
   /** Provider source-group selectors (immutable array; replaced on change). */
   private grouping: readonly TaskBoardGroupingSelector[] = []
   private remoteSubscribed = false
+  /** Cards already announced by a system notification, so one turn never nags twice. */
+  private announcedUnread = new Set<string>()
+  /** Pending merged notification, so rounds finishing together collapse into one. */
+  private unreadNoticeTimer: ReturnType<typeof setTimeout> | undefined
+  /** Round titles queued for the next merged notice. */
+  private pendingUnread = new Map<string, string>()
   private remoteInitialization: Promise<boolean> | undefined
 
   /** @param deps - store and the sessions navigation face. */
@@ -382,6 +388,9 @@ export class BoardController {
    * shows the conversation.
    */
   openBoard(): void {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      void Notification.requestPermission().catch(() => {})
+    }
     if (this.boardOpen) return
     this.boardOpen = true
     this.notify()
@@ -445,8 +454,38 @@ export class BoardController {
   openTask(id: string): void {
     if (this.tasks.some(task => task.id === id)) {
       this.selectedTaskId = id
+      // Opening a card IS the acknowledgement: whatever it already produced
+      // stops counting as unread, and the Host starts watching that session
+      // again so the next turn held there is noticed too.
+      this.focusTask(id)
       this.notify()
     }
+  }
+
+  /**
+   * Accept a finished round: the card leaves 等待确认 and counts as done.
+   *
+   * Confirmation is the user's act, so it acknowledges the results at the same
+   * time — accepting work you have not looked at makes no sense.
+   * @param id - the card being confirmed.
+   */
+  confirmTask(id: string): void {
+    this.focusTask(id)
+    this.moveTask(id, 'done')
+  }
+
+  /**
+   * Acknowledge a card's results and keep its conversation under observation.
+   *
+   * Deliberately not routed through {@link commitRemote}: opening a card is a
+   * read-ish action, and flashing the card's pending state for it would look
+   * like a write. A failed call is silent — the next snapshot corrects the
+   * badge either way.
+   * @param id - the card the user opened.
+   */
+  focusTask(id: string): void {
+    if (this.deps.transport === undefined) return
+    void this.performRemote({ kind: 'focus', taskId: id })
   }
 
   closeTask(): void {
@@ -944,8 +983,54 @@ export class BoardController {
       && this.tasks.find(task => task.id === this.selectedTaskId)?.archivedAt !== undefined) {
       this.selectedTaskId = undefined
     }
+    this.announceUnread()
     this.notify()
     return true
+  }
+
+  /**
+   * Announce freshly unread round results as ONE system notification.
+   *
+   * Merged on purpose: a burst of finished rounds is a single thing the user
+   * has to look at, and the detail lives in the board's own 本轮结果 inbox. It
+   * fires only while the page is hidden — a visible board already shows the
+   * bell — and each card is announced once, so a republished snapshot never
+   * re-notifies the same turn.
+   */
+  private announceUnread(): void {
+    if (typeof Notification === 'undefined') return
+    // Deduplicated per ROUND, not per card: a card that runs twice notifies
+    // twice, while a republished snapshot never repeats the same turn.
+    const fresh = this.tasks.filter(task => {
+      const endedAt = task.conversation?.turnEndedAt
+      return endedAt !== undefined && conversationUnread(task) && !this.announcedUnread.has(`${task.id}:${endedAt}`)
+    })
+    if (fresh.length === 0) return
+    if (Notification.permission !== 'granted') return
+    // Nothing to announce while the page is in the foreground: the board itself
+    // shows the bell, and the rows are right there under it.
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') return
+    for (const task of fresh) {
+      this.announcedUnread.add(`${task.id}:${task.conversation?.turnEndedAt}`)
+      this.pendingUnread.set(task.id, task.title)
+    }
+    // One merged notice per window: rounds finishing together are one thing to
+    // look at, not one banner each.
+    if (this.unreadNoticeTimer !== undefined) return
+    this.unreadNoticeTimer = setTimeout(() => {
+      this.unreadNoticeTimer = undefined
+      const titles = [...this.pendingUnread.values()]
+      this.pendingUnread.clear()
+      if (titles.length === 0) return
+      try {
+        new Notification(titles.length === 1 ? titles[0] : `${titles.length} 个任务有本轮结果`, {
+          body: titles.join(' · '),
+          tag: 'dsh-task-board-round',
+        })
+      } catch {
+        // A platform without desktop notifications simply skips this wave.
+      }
+    }, 3000)
   }
 
   private notify(): void {

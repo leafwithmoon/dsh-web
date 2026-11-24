@@ -10,7 +10,7 @@
  * localStorage backend.
  */
 import { isValidCron, isValidTimeZone } from './schedule.ts'
-import { SCHEDULE_STOP_REASONS, isTaskPermission, isTaskStatus, normalizeExecutionRework, normalizeTags, normalizeTargetId, type ScheduleRule, type ScheduleStopReason, type TaskFreeze, type TaskRecord, type TaskPermission, type TaskStatus } from './tasks.ts'
+import { SCHEDULE_STOP_REASONS, isTaskPermission, isTaskStatus, normalizeConversation, normalizeExecutionRework, normalizeTags, normalizeTargetId, type ScheduleRule, type ScheduleStopReason, type TaskFreeze, type TaskRecord, type TaskPermission, type TaskStatus } from './tasks.ts'
 import { isExecutionOutcome } from './subtask.ts'
 import { normalizeExecutionSummary } from './execution-summary.ts'
 import type { TaskHandover } from './handover.ts'
@@ -75,6 +75,7 @@ function isTaskRecordShape(value: unknown): value is Omit<TaskRecord, 'status'> 
   if (record.hidden !== undefined && typeof record.hidden !== 'boolean') return false
   if (record.attachments !== undefined && !Array.isArray(record.attachments)) return false
   if (record.reuseSession !== undefined && typeof record.reuseSession !== 'boolean') return false
+  if (record.conversation !== undefined && (typeof record.conversation !== 'object' || record.conversation === null || Array.isArray(record.conversation))) return false
   if (!Array.isArray(record.executions)) return false
   for (const execution of record.executions) {
     if (typeof execution !== 'object' || execution === null) return false
@@ -296,7 +297,13 @@ export function parseLedger(raw: string | null): TaskRecord[] {
     task.reasoningEffort = normalizeTargetId(row.reasoningEffort)
     task.archivedAt = typeof row.archivedAt === 'number' && Number.isFinite(row.archivedAt) ? row.archivedAt : undefined
     task.permission = isTaskPermission(row.permission) ? row.permission as TaskPermission : undefined
-    task.reuseSession = row.reuseSession === true ? true : undefined
+    // Only the explicit opt-out is stored, and it survives a reload; absent
+    // means the default (continue in the same conversation).
+    task.reuseSession = row.reuseSession === false ? false : (row.reuseSession === true ? true : undefined)
+    // The bound conversation is repaired like every other additive block: it
+    // survives only when it still names a session, so a hand-edited ledger
+    // drops the binding instead of the card.
+    task.conversation = normalizeConversation(row.conversation)
     task.freeze = normalizeFreeze(row.freeze)
     task.handover = normalizeHandover(row.handover)
     // Tags are repaired field by field like the schedule: a malformed entry is

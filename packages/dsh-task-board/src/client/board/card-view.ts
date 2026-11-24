@@ -67,7 +67,8 @@ export function cardOutcome(task: TaskRecord, archived: boolean): CardOutcome {
   if (hasOpenExecution(task)) return archived ? { latest, declared: false } : { tone: 'running', latest, declared: false }
   const result = latest.result
   if (archived || result === undefined) return { latest, declared: false }
-  const declared = (task.status === 'done' && result !== 'succeeded') || (task.status === 'failed' && result === 'succeeded')
+  const settledColumn = task.status === 'done' || task.status === 'review'
+  const declared = (settledColumn && result !== 'succeeded') || (task.status === 'failed' && result === 'succeeded')
   return { tone: result, latest, declared }
 }
 
@@ -99,7 +100,7 @@ export function cardTimeline(task: TaskRecord, archived: boolean): CardTimeline 
   if (archived && task.archivedAt !== undefined) return { key: 'card.time.archived', at: task.archivedAt }
   const open = task.executions.find(execution => execution.endedAt === undefined)
   if (open !== undefined) return { key: 'card.time.started', at: open.startedAt }
-  if (task.status === 'done' || task.status === 'failed') {
+  if (task.status === 'done' || task.status === 'review' || task.status === 'failed') {
     const latest = task.executions[task.executions.length - 1]
     if (latest?.endedAt !== undefined) return { key: 'card.time.settled', at: latest.endedAt }
     return { key: 'card.time.updated', at: task.updatedAt }
@@ -181,7 +182,7 @@ export function groupByRecency<T>(items: readonly T[], at: (item: T) => number, 
 }
 
 /** Columns that render compact by default: the long settled column. */
-export const DEFAULT_COMPACT_COLUMNS: readonly TaskStatus[] = ['done']
+export const DEFAULT_COMPACT_COLUMNS: readonly TaskStatus[] = ['review', 'done']
 
 /** Browser storage key of the per-column density choice. */
 export const COMPACT_COLUMNS_KEY = 'dsh.taskBoard.compactColumns.v1'

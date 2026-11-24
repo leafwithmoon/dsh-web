@@ -222,6 +222,12 @@ export type TaskBoardAction =
    */
   | { kind: 'rework'; taskId: string; instructions: string }
   | { kind: 'confirm-permission'; taskId: string }
+  /**
+   * The user opened the card: acknowledge what it already produced and keep its
+   * conversation under observation for the watch window, so a turn the user
+   * holds in that session still shows up as 进行中 / 有结果.
+   */
+  | { kind: 'focus'; taskId: string }
   | { kind: 'set-parent'; taskId: string; parentId: string | null }
   /** Ledger-wide label management; see core/use-cases/task-tag.ts. */
   | { kind: 'rename-tag'; from: string; to: string }
@@ -644,6 +650,7 @@ function parseEnvelopeAction(value: unknown): TaskBoardActionEnvelope | undefine
       if (instructions === '' || instructions.length > TASK_BOARD_MESSAGE_MAX_LENGTH) return undefined
       return { requestId: envelope.requestId, action: { kind: 'rework', taskId, instructions } }
     }
+    case 'focus':
     case 'confirm-permission':
     case 'delete':
     case 'archive':

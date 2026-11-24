@@ -10,7 +10,7 @@ import { normalizeTaskIntegrations, type TaskBoardExtensionPayload } from './ext
 import { normalizeAttachments, type TaskAttachment } from './attachment.ts'
 
 /** Task lifecycle status, one per kanban column. */
-export type TaskStatus = 'backlog' | 'todo' | 'running' | 'done' | 'failed'
+export type TaskStatus = 'backlog' | 'todo' | 'running' | 'review' | 'done' | 'failed'
 
 /** Settled outcome of one execution attempt. */
 export type ExecutionOutcome = 'succeeded' | 'failed' | 'cancelled'
@@ -60,6 +60,131 @@ export function normalizeExecutionRework(value: unknown): ExecutionRework | unde
   if (typeof instructions !== 'string') return undefined
   const trimmed = instructions.trim()
   return trimmed === '' ? undefined : { instructions: trimmed }
+}
+
+/**
+ * The live conversation a card is bound to.
+ *
+ * A card is not a one-shot job. Once it has run, its session IS the card's
+ * conversation, and the user keeps talking in it long after the run settled.
+ * The board remembers which session that is, what the roster last said about
+ * it, when its most recent turn ended, and when the user last looked — enough
+ * to show 进行中 while a turn is in flight and 有结果 once one ends unread.
+ * Absent on a card that has never run.
+ */
+export interface TaskConversation {
+  /** The dsh session this card continues in. */
+  sessionId: string
+  /** Last observed state of that session's current turn. */
+  state?: 'running' | 'idle'
+  /** When the most recent turn was observed ending (ms epoch). */
+  turnEndedAt?: number
+  /** When the user last acknowledged this card's results (ms epoch). */
+  seenAt?: number
+  /**
+   * Until when the Host keeps reading that session's state (ms epoch).
+   *
+   * Watching is explicit: the browser arms it when the user opens the card, so
+   * an idle board with cards nobody is talking in still reads no roster.
+   */
+  watchUntil?: number
+}
+
+/**
+ * Repair a persisted conversation block: it survives only when it names a
+ * session, so a hand-edited ledger loses the block instead of the card.
+ */
+export function normalizeConversation(value: unknown): TaskConversation | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const row = value as Record<string, unknown>
+  const sessionId = typeof row.sessionId === 'string' ? row.sessionId.trim() : ''
+  if (sessionId === '') return undefined
+  const stamp = (entry: unknown): number | undefined =>
+    typeof entry === 'number' && Number.isFinite(entry) ? entry : undefined
+  const state = row.state === 'running' || row.state === 'idle' ? row.state : undefined
+  return {
+    sessionId,
+    state,
+    turnEndedAt: stamp(row.turnEndedAt),
+    seenAt: stamp(row.seenAt),
+    watchUntil: stamp(row.watchUntil),
+  }
+}
+
+/**
+ * How long opening a card keeps its session under observation.
+ *
+ * The window is what makes "进行中 while you keep talking" cheap: the Host
+ * reads the roster only for cards the user actually opened, and the window
+ * covers a working session far longer than one turn usually takes.
+ */
+export const CONVERSATION_WATCH_MS = 30 * 60_000
+
+/** Whether the card's conversation ended a turn the user has not acknowledged. */
+export function conversationUnread(task: TaskRecord): boolean {
+  const conversation = task.conversation
+  if (conversation?.turnEndedAt === undefined) return false
+  return conversation.seenAt === undefined || conversation.turnEndedAt > conversation.seenAt
+}
+
+/** Whether the card's conversation has a turn in flight right now. */
+export function conversationRunning(task: TaskRecord): boolean {
+  return task.conversation?.state === 'running'
+}
+
+/** Bind a card to the session it continues in, keeping what is already known about it. */
+export function withConversationSession(task: TaskRecord, sessionId: string): TaskRecord {
+  const previous = task.conversation
+  if (previous?.sessionId === sessionId) return task
+  return { ...task, conversation: { ...previous, sessionId } }
+}
+
+/** Record that a watched conversation started a turn. */
+export function withConversationRunning(task: TaskRecord): TaskRecord {
+  const conversation = task.conversation
+  if (conversation === undefined || conversation.state === 'running') return task
+  return { ...task, conversation: { ...conversation, state: 'running' } }
+}
+
+/**
+ * Record that a conversation's turn ended.
+ *
+ * Idempotent by construction: the caller passes the instant the Host observed
+ * the end, and a conversation already stamped at or after it keeps its stamp —
+ * two observers of one turn can never arm a second unread result.
+ */
+export function withConversationTurnEnded(task: TaskRecord, at: number): TaskRecord {
+  const conversation = task.conversation
+  if (conversation === undefined) return task
+  if (conversation.turnEndedAt !== undefined && conversation.turnEndedAt >= at) return task
+  return { ...task, conversation: { ...conversation, state: 'idle', turnEndedAt: at } }
+}
+
+/**
+ * A finished conversation round proposes completion.
+ *
+ * The board never declares work done on the user's behalf, so a card that was
+ * running (or was already signed off) goes back to 等待确认 when a new round
+ * ends in its session. A failed card keeps its failure — that verdict came from
+ * the run, not from the conversation.
+ */
+export function withConversationAwaitingReview(task: TaskRecord): TaskRecord {
+  if (task.archivedAt !== undefined) return task
+  if (task.status !== 'running' && task.status !== 'done') return task
+  return { ...task, status: 'review' }
+}
+
+/**
+ * Acknowledge a card's results and keep watching its session for this long.
+ *
+ * Opening a card is the acknowledgement: everything the user has already seen
+ * stops counting as unread, while the watch window keeps the Host reading that
+ * session so the next turn it holds is noticed too.
+ */
+export function withConversationFocus(task: TaskRecord, at: number, watchMs: number): TaskRecord {
+  const conversation = task.conversation
+  if (conversation === undefined) return task
+  return { ...task, conversation: { ...conversation, seenAt: at, watchUntil: at + watchMs } }
 }
 
 /**
@@ -497,6 +622,13 @@ export interface TaskRecord {
    */
   reuseSession?: boolean
   /**
+   * The live conversation bound to this card (see {@link TaskConversation}).
+   * Written when an execution gets its session and kept across runs, so the
+   * board can show "进行中" while the user talks in that session and "有结果"
+   * once a turn ends. Additive: absent on cards that never ran.
+   */
+  conversation?: TaskConversation
+  /**
    * Historical Agent Team opt-in. New runs never write it and the Host never
    * reads it to decide how to run: a run with unfinished subtasks opens one
    * session whose own agent dispatches subagents. The field is kept so cards
@@ -661,6 +793,9 @@ export const COLUMNS: readonly { status: TaskStatus; label: string }[] = [
   { status: 'backlog', label: '待规划' },
   { status: 'todo', label: '待办' },
   { status: 'running', label: '进行中' },
+  // A finished round waits here until the user confirms it: the board never
+  // declares work done on the user's behalf.
+  { status: 'review', label: '等待确认' },
   { status: 'done', label: '已完成' },
   { status: 'failed', label: '已失败' },
 ]
@@ -678,14 +813,14 @@ export const COLUMNS: readonly { status: TaskStatus; label: string }[] = [
  * distinguishable from a recorded outcome in the card's execution history; the
  * next settled run overwrites the column with the real one.
  */
-export const MANUAL_STATUSES: readonly TaskStatus[] = ['backlog', 'todo', 'running', 'done', 'failed']
+export const MANUAL_STATUSES: readonly TaskStatus[] = ['backlog', 'todo', 'running', 'review', 'done', 'failed']
 
 /** Statuses the runner may move a card to from 'running'. */
-export const RUNNER_SETTLE_STATUSES: readonly TaskStatus[] = ['done', 'failed']
+export const RUNNER_SETTLE_STATUSES: readonly TaskStatus[] = ['review', 'done', 'failed']
 
 /** All valid statuses (closed union guard). */
 export const ALL_STATUSES: readonly TaskStatus[] = [
-  'backlog', 'todo', 'running', 'done', 'failed',
+  'backlog', 'todo', 'running', 'review', 'done', 'failed',
 ]
 
 /** Brand an unknown string as a status; undefined when it is not one. */
@@ -768,7 +903,10 @@ export function createTask(input: NewTaskInput, now: number, id: string): TaskRe
     permission: isTaskPermission(input.permission) ? input.permission : undefined,
     model: normalizeTargetId(input.model),
     reasoningEffort: normalizeTargetId(input.reasoningEffort),
-    reuseSession: input.reuseSession === true ? true : undefined,
+    // On by default: a card is a conversation, and later runs should continue
+    // in it. Only an explicit opt-out is stored, so a card written before the
+    // default changed joins the same behaviour instead of silently opting out.
+    reuseSession: input.reuseSession === false ? false : undefined,
     ...(input.freeze === undefined ? {} : { freeze: freezeOf(input.freeze, now) }),
     ...(input.handover === undefined ? {} : { handover: { ...input.handover, bundledAt: now } }),
     ...(tags === undefined ? {} : { tags }),
@@ -876,7 +1014,10 @@ export function startExecution(
  @returns the status the card shows afterwards.
  */
 export function settledStatus(task: TaskRecord, outcome: ExecutionOutcome): TaskStatus {
-  if (outcome === 'succeeded') return task.schedule?.enabled === true ? 'todo' : 'done'
+  // A successful round only PROPOSES completion. A card the user drove sits in
+  // 等待确认 until they accept it; a scheduled card keeps cycling through 待办 so
+  // an unattended automation never piles up cards waiting for a human.
+  if (outcome === 'succeeded') return task.schedule?.enabled === true ? 'todo' : 'review'
   if (outcome === 'failed') return 'failed'
   return task.status === 'running' ? 'todo' : task.status
 }

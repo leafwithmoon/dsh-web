@@ -199,7 +199,7 @@ function taskSummary(
     ...(task.permission === undefined ? {} : { permission: task.permission }),
     ...(task.model === undefined ? {} : { model: task.model }),
     ...(task.reasoningEffort === undefined ? {} : { reasoningEffort: task.reasoningEffort }),
-    ...(task.reuseSession === true ? { reuseSession: true } : {}),
+    ...(task.reuseSession === false ? { reuseSession: false } : {}),
     ...(task.teamRun === true ? { teamRun: true } : {}),
     ...(task.schedule === undefined ? {} : { schedule: scheduleView(task.schedule) }),
     ...(task.freeze === undefined ? {} : { continuationCard: true }),
@@ -277,7 +277,7 @@ function liftHandle(handle: Record<string, unknown>): Record<string, unknown> {
 
 /** Board summary attached to task_board_list. */
 function boardView(snapshot: TaskBoardSnapshot, maxSubtaskDepth: number): Record<string, unknown> {
-  const counts = { backlog: 0, todo: 0, running: 0, done: 0, failed: 0, archived: 0 }
+  const counts = { backlog: 0, todo: 0, running: 0, review: 0, done: 0, failed: 0, archived: 0 }
   for (const task of snapshot.tasks) {
     if (task.archivedAt !== undefined) counts.archived += 1
     else counts[task.status] += 1
@@ -407,7 +407,7 @@ function buildManageTool(host: TaskBoardToolHost): ToolDefinition {
     name: 'task_board_manage',
     description: [
       'Move, archive, restore, delete, or settle one task board card.',
-      'move-backlog, move-todo, move-running, move-done and move-failed are the manual column moves and cover every column; a card the runner is executing (one with an open execution) cannot be moved.',
+      'move-backlog, move-todo, move-running, move-review, move-done and move-failed are the manual column moves and cover every column (move-review parks a card in 等待确认, where the user signs it off); a card the runner is executing (one with an open execution) cannot be moved.',
       'A manual move writes the card column only and never fabricates an execution record, so the card reports a declaration rather than evidence of a run: done/failed declare work finished (or failed) outside a Host-run execution — human work, an external system, a decision made elsewhere — and running says the work is under way without a tracked session. Use task_board_run when the work should actually run in a session here.',
       'record-external-outcome is the record-backed version of move-done and move-failed: use it when YOU, or another agent outside this Host, actually finished or failed the card with your own model, so the terminal column and the run history both derive from one execution record. It takes result (succeeded or failed) and initiatedBy (who completed it, for example your own agent name) plus an optional summary, and it is refused while the card still has an open execution: the Host stays the only authority over a run it is executing. It cannot record running or cancelled — those remain Host-only. A parent card that dispatched its subtasks uses it once, at the end, to backfill every subtask card with the conclusion it reached; the Host records an inherited verdict on a subtask the parent never wrote back, so the write-back is what keeps each subtask conclusion its own.',
       'settle force-closes the open execution of a card the board can no longer observe (a stuck running card) and records it cancelled with the caller as the reason, so the card returns to the todo column and can be run again.',
@@ -419,7 +419,7 @@ function buildManageTool(host: TaskBoardToolHost): ToolDefinition {
       action: {
         type: 'string',
         required: true,
-        enum: ['move-todo', 'move-backlog', 'move-running', 'move-done', 'move-failed', 'archive', 'restore', 'delete', 'settle', 'record-external-outcome'],
+        enum: ['move-todo', 'move-backlog', 'move-running', 'move-review', 'move-done', 'move-failed', 'archive', 'restore', 'delete', 'settle', 'record-external-outcome'],
         description: 'The lifecycle operation to perform.',
       },
       // Only record-external-outcome reads these two; every other action
@@ -476,6 +476,7 @@ function buildManageTool(host: TaskBoardToolHost): ToolDefinition {
         'move-todo': { kind: 'move', taskId: args.taskId, status: 'todo' },
         'move-backlog': { kind: 'move', taskId: args.taskId, status: 'backlog' },
         'move-running': { kind: 'move', taskId: args.taskId, status: 'running' },
+    'move-review': { kind: 'move', taskId: args.taskId, status: 'review' },
         'move-done': { kind: 'move', taskId: args.taskId, status: 'done' },
         'move-failed': { kind: 'move', taskId: args.taskId, status: 'failed' },
         archive: { kind: 'archive', taskId: args.taskId },
@@ -700,7 +701,7 @@ function buildCreateTool(host: TaskBoardToolHost): ToolDefinition {
         // leaving the card to resolve the host default at run time. Only the
         // targets the caller omitted are filled.
         applyCardDefaults: true,
-        ...(args.reuseSession === true ? { reuseSession: true } : {}),
+        ...(args.reuseSession === false ? { reuseSession: false } : {}),
         ...(tags.length === 0 ? {} : { tags }),
         ...(args.schedule === undefined ? {} : {
           schedule: {
@@ -788,7 +789,7 @@ function buildUpdateTool(host: TaskBoardToolHost): ToolDefinition {
       if (has(args, 'permission') && typeof args.permission === 'string') {
         patch.permission = args.permission === '' ? undefined : args.permission
       }
-      if (has(args, 'reuseSession')) patch.reuseSession = args.reuseSession === true
+      if (has(args, 'reuseSession')) patch.reuseSession = args.reuseSession !== false
       if (has(args, 'tags')) {
         const tags = args.tags ?? []
         patch.tags = tags.length === 0

@@ -190,6 +190,7 @@ function cardDefaultsOf(defaults: CardDefaults): TaskBoardSnapshot['cardDefaults
  * unknown kind into a refusal.
  */
 const ACTION_KINDS: Readonly<Record<TaskBoardAction['kind'], true>> = {
+  focus: true,
   import: true,
   create: true,
   update: true,
@@ -947,6 +948,10 @@ export class TaskBoardHostService {
     })
     // No unconditional emit here: real changes already emit through the
     // ledger subscription (settles) and the gated power listener above.
+    // Cards the user opened are watched here too: a turn held in that session
+    // (not opened by the board) still has to move the card between 进行中 and
+    // 有结果. The ledger commits only when something actually changed.
+    this.ledger.observeConversations(running.items)
     await this.reconcileExecutions(running.items, current.openExecutions)
     return true
   }
@@ -964,7 +969,7 @@ export class TaskBoardHostService {
    * @returns the session id to continue in, or undefined for a fresh session.
    */
   private async reuseSessionFor(task: TaskRecord): Promise<string | undefined> {
-    if (task.reuseSession !== true) return undefined
+    if (task.reuseSession === false) return undefined
     const decision = await this.reuseDecision(task, false)
     if (decision.sessionId !== undefined) return decision.sessionId
     if (decision.archivedSessionId !== undefined) {

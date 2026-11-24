@@ -219,6 +219,7 @@
 .statusDot[data-status='backlog'] { background: var(--dsw-alias-label-tertiary); }
 .statusDot[data-status='todo'] { background: var(--dsw-alias-state-business-primary); }
 .statusDot[data-status='running'] { background: var(--dsw-alias-state-warn-primary); }
+.statusDot[data-status='review'] { background: var(--dsw-alias-state-warn-secondary); }
 .statusDot[data-status='done'] { background: var(--dsw-alias-state-success-primary); }
 .statusDot[data-status='failed'] { background: var(--dsw-alias-state-error-primary); }
 
@@ -674,6 +675,46 @@
   flex: none;
   width: var(--dsh-tb-card-row);
   height: var(--dsh-tb-card-row);
+}
+
+/* A card whose bound session ended a turn the user has not opened yet. */
+.card[data-unread]::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dsw-alias-state-warn-primary);
+}
+
+/* A card whose bound session holds a turn right now. */
+.cardLive {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border: 1px solid var(--dsw-alias-state-business-primary);
+  border-radius: 999px;
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.cardLive::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--dsw-alias-state-business-primary);
+  animation: dshTbLivePulse 1600ms ease-in-out infinite;
+}
+
+@keyframes dshTbLivePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
 }
 
 .cardSpinner {
@@ -1349,6 +1390,11 @@
 .statusBadge[data-status='running'] {
   color: var(--dsw-alias-state-warn-primary);
   border-color: var(--dsw-alias-state-warn-primary);
+}
+
+.statusBadge[data-status='review'] {
+  color: var(--dsw-alias-state-warn-secondary);
+  border-color: var(--dsw-alias-state-warn-secondary);
 }
 
 .statusBadge[data-status='done'] {
@@ -2735,5 +2781,120 @@
   font-size: 13px;
   color: var(--dsw-alias-label-primary);
   overflow-wrap: anywhere;
+}
+
+
+/* --- round results (本轮结果) ------------------------------------------------ */
+
+/* The inbox anchors under the header toolbar, so it reads as the header's own
+   popover instead of a floating surface with no owner. */
+.boardHeader {
+  position: relative;
+}
+
+.inboxBadge {
+  flex: none;
+  min-width: 16px;
+  height: 16px;
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--dsw-alias-state-warn-primary);
+  color: var(--dsw-alias-label-primary-foreground);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.inboxPanel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 380px;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 10px;
+  background: var(--dsw-alias-surface-raised);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px var(--dsw-alias-bg-mask-1);
+}
+
+.inboxHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 4px 4px;
+}
+
+.inboxHeading {
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.inboxCount,
+.inboxHint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.inboxHint {
+  margin: 2px 4px 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--dsw-alias-separator-primary);
+}
+
+.inboxRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px;
+  border-radius: 8px;
+}
+
+.inboxRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.inboxEntry {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 6px 8px;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.inboxTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.inboxMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.inboxEmpty {
+  padding: 10px 6px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
 }
 

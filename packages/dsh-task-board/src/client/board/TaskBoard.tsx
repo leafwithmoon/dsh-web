@@ -5,7 +5,7 @@
  */
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { selectedTaskOf, type BoardController } from '../../core/controller.ts'
-import { COLUMNS, MANUAL_STATUSES, canMoveTask, collectKnownTags, hasOpenExecution, tagTone, type TaskRecord, type TaskStatus } from '../../core/tasks.ts'
+import { COLUMNS, MANUAL_STATUSES, canMoveTask, collectKnownTags, conversationUnread, hasOpenExecution, tagTone, type TaskRecord, type TaskStatus } from '../../core/tasks.ts'
 import { t } from '../locales.ts'
 import css from '../board.module.css'
 import { IconChevronLeft, IconCompactRows, IconExpandRows, IconPlus } from './icons.tsx'
@@ -14,9 +14,15 @@ import { usePresence } from './overlay.tsx'
 import { STATUS_KEY } from './status-key.ts'
 import { TagManagerModal } from './TagManagerModal.tsx'
 import { cardTimeline, groupByRecency, readCompactColumns, RECENCY_KEY, writeCompactColumns, type RecencyGroup } from './card-view.ts'
-import { TaskCard } from './TaskCard.tsx'
+import { formatTime, TaskCard } from './TaskCard.tsx'
 import { TaskDetail } from './TaskDetail.tsx'
 import { groupTasksBySource, isSourceGroupFolded, readSourceGroupFolds, sourceGroupFoldKey, writeSourceGroupFolds, type SourceGroupView } from './source-group.ts'
+
+/** Collapse a result text into the one line the inbox row can show. */
+function inboxSummary(text: string | undefined): string {
+  const plain = (text ?? '').replace(/\s+/g, ' ').trim()
+  return plain.length > 72 ? plain.slice(0, 72) + '…' : plain
+}
 
 /** Sentinel option value of the project row's "register a new project" entry. */
 export const NEW_PROJECT_VALUE = '__dsh_new_project__'
@@ -116,7 +122,7 @@ const MemoTaskCard = memo(function MemoTaskCard({ task, pending, timeZone, onOpe
 })
 
 /** Settled columns whose cards group by recency and fold the oldest group. */
-const GROUPED_COLUMNS: ReadonlySet<TaskStatus> = new Set(['done', 'failed'])
+const GROUPED_COLUMNS: ReadonlySet<TaskStatus> = new Set(['review', 'done', 'failed'])
 
 /** Cards a grouped column renders before the oldest group folds. */
 export const COLUMN_FOLD_THRESHOLD = 30
@@ -154,6 +160,9 @@ export function TaskBoard({ controller }: { controller: BoardController }) {
   const [newProjectPath, setNewProjectPath] = useState('')
   const [newProjectError, setNewProjectError] = useState<string | undefined>(undefined)
   const [newProjectPending, setNewProjectPending] = useState(false)
+  // The 本轮结果 inbox: what the board produces when a watched conversation
+  // ends a turn the user has not looked at yet.
+  const [showInbox, setShowInbox] = useState(false)
   const selected = selectedTaskOf(snapshot)
   const archiveView = snapshot.archiveView
   // Overlay lifecycle: both the detail view and the create dialog keep the
@@ -202,6 +211,11 @@ export function TaskBoard({ controller }: { controller: BoardController }) {
     && matchesFilter(task, filter)
     && matchesTagFilter(task, tagFilter),
   )
+  // Round results the user has not opened yet: one row per card whose bound
+  // conversation ended a turn after the last acknowledgement.
+  const unreadResults = onBoard
+    .filter(task => conversationUnread(task))
+    .sort((left, right) => (right.conversation?.turnEndedAt ?? 0) - (left.conversation?.turnEndedAt ?? 0))
   const projects = snapshot.executionOptions.workspaces
   const canCreateProject = snapshot.canCreateWorkspace === true
   const submitNewProject = async (): Promise<void> => {
@@ -412,6 +426,21 @@ export function TaskBoard({ controller }: { controller: BoardController }) {
           </button>
           <button
             type="button"
+            className={css.ghostButton}
+            data-dsh-part="inbox-toggle"
+            data-active={showInbox ? 'true' : undefined}
+            aria-pressed={showInbox}
+            aria-label={t('board.inbox')}
+            title={t('board.inboxHint')}
+            onClick={() => { setShowInbox(value => !value) }}
+          >
+            {t('board.inbox')}
+            {unreadResults.length > 0 && (
+              <span className={css.inboxBadge} data-dsh-part="inbox-count">{unreadResults.length}</span>
+            )}
+          </button>
+          <button
+            type="button"
             className={css.primaryButton}
             onClick={() => { setShowNew(true) }}
           >
@@ -420,6 +449,54 @@ export function TaskBoard({ controller }: { controller: BoardController }) {
           </button>
         </div>
       </header>
+
+      {showInbox && (
+        <div className={css.inboxPanel} data-dsh-part="inbox-panel">
+          <div className={css.inboxHead}>
+            <strong className={css.inboxHeading}>{t('board.inbox')}</strong>
+            <span className={css.inboxCount}>{t('board.inboxCount', { count: String(unreadResults.length) })}</span>
+          </div>
+          {unreadResults.length === 0
+            ? <p className={css.inboxEmpty}>{t('board.inboxEmpty')}</p>
+            : unreadResults.map(task => (
+              <div key={task.id} className={css.inboxRow}>
+                <button
+                  type="button"
+                  className={css.inboxEntry}
+                  data-dsh-part="inbox-entry"
+                  onClick={() => { setShowInbox(false); controller.openTask(task.id) }}
+                >
+                  <span className={css.inboxTitle}>{task.title}</span>
+                  <span className={css.inboxMeta}>
+                    {task.conversation?.turnEndedAt === undefined
+                      ? ''
+                      : formatTime(task.conversation.turnEndedAt, snapshot.host?.scheduler.timeZone)}
+                    {inboxSummary(task.executions.at(-1)?.summary?.text) === ''
+                      ? ''
+                      : ' · ' + inboxSummary(task.executions.at(-1)?.summary?.text)}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={css.ghostButton}
+                  onClick={() => { controller.confirmTask(task.id) }}
+                >
+                  {t('board.inboxConfirm')}
+                </button>
+                {task.conversation !== undefined && (
+                  <button
+                    type="button"
+                    className={css.ghostButton}
+                    onClick={() => { controller.openSession(task.conversation!.sessionId) }}
+                  >
+                    {t('board.inboxOpen')}
+                  </button>
+                )}
+              </div>
+            ))}
+          <p className={css.inboxHint}>{t('board.inboxHint')}</p>
+        </div>
+      )}
 
       {showNewProject && (
         <div className={css.projectDialog} data-dsh-part="project-dialog">

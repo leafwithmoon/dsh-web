@@ -7,7 +7,7 @@ import { isValidCron, isValidTimeZone, nextRunAtMs, resolveHostTimeZone } from '
 import { isTaskRecord, parseLedger } from './core/store.ts'
 import { DEFAULT_SPEND_BUDGET_TOKENS, spendCapMessage, spendCapReached } from './core/spend-budget.ts'
 import { usedTokensToday } from './host-spend.ts'
-import { canMoveManually, hasOpenExecution, retainRecentExecutions, scheduleExhausted, scheduleRunBudget, settleExecution, settledStatus, startExecution, withSchedule, withStatus, type ExecutionOutcome, type ExecutionRecord, type ExecutionRework, type ExecutionSummary, type ScheduleMode, type ScheduleStopReason, type TaskRecord } from './core/tasks.ts'
+import { CONVERSATION_WATCH_MS, canMoveManually, hasOpenExecution, withConversationAwaitingReview, retainRecentExecutions, scheduleExhausted, scheduleRunBudget, settleExecution, settledStatus, startExecution, withConversationFocus, withConversationRunning, withConversationSession, withConversationTurnEnded, withSchedule, withStatus, type ExecutionOutcome, type ExecutionRecord, type ExecutionRework, type ExecutionSummary, type ScheduleMode, type ScheduleStopReason, type TaskRecord } from './core/tasks.ts'
 import {
   DEFAULT_SUBTASK_DEPTH,
   ancestorChain,
@@ -661,6 +661,7 @@ export class HostTaskLedger {
   runtimeView(): LedgerRuntimeView {
     let armedSchedules = 0
     let runningCards = 0
+    let watchedConversations = 0
     // Stored run groups a team-mode card opened before team runs were retired:
     // every other member of those groups ran as a teammate inside that card's
     // Lead session, which is why its turn is read even while its session runs.
@@ -676,6 +677,9 @@ export class HostTaskLedger {
     for (const task of this.document.tasks) {
       if (task.archivedAt === undefined && task.schedule?.enabled === true) armedSchedules += 1
       if (task.status === 'running') runningCards += 1
+      if (task.archivedAt === undefined
+        && task.conversation?.watchUntil !== undefined
+        && task.conversation.watchUntil > this.now()) watchedConversations += 1
       for (const execution of task.executions) {
         if (execution.endedAt !== undefined) continue
         if (execution.sessionId !== undefined) openSessionIds.push(execution.sessionId)
@@ -697,7 +701,7 @@ export class HostTaskLedger {
       armedSchedules,
       openExecutions,
       openSessionIds,
-      needsSessionState: openExecutions.length > 0 || runningCards > 0,
+      needsSessionState: openExecutions.length > 0 || runningCards > 0 || watchedConversations > 0,
     }
   }
 
@@ -1061,7 +1065,7 @@ export class HostTaskLedger {
     const groupId = execution.runGroupId
     if (groupId === undefined) {
       this.document.tasks = this.document.tasks.map(item => item.id === taskId
-        ? settleExecution(item, executionId, outcome, now, error, summary)
+        ? withConversationTurnEnded(settleExecution(item, executionId, outcome, now, error, summary), now)
         : item)
       this.commit()
       return
@@ -1089,7 +1093,11 @@ export class HostTaskLedger {
     // The run's own card may now be terminal: hand its verdict down to the
     // subtasks it was expected to dispatch.
     if (this.inheritVerdictForDescendants(taskId, executionId, groupId, now)) changed = true
-    if (changed) this.commit()
+    if (changed) {
+      this.document.tasks = this.document.tasks.map(item =>
+        item.id === taskId ? withConversationTurnEnded(item, now) : item)
+      this.commit()
+    }
   }
 
   /**
@@ -1170,11 +1178,53 @@ export class HostTaskLedger {
     // observes (a teammate spawn that resolved after its Team was closed).
     if (task?.executions.find(entry => entry.id === executionId)?.endedAt !== undefined) return
     this.document.tasks = this.document.tasks.map(item => item.id !== taskId ? item : {
-      ...item,
+      ...withConversationRunning(withConversationSession(item, sessionId)),
       updatedAt: now,
       executions: item.executions.map(entry => entry.id === executionId ? { ...entry, sessionId } : entry),
     })
     this.commit()
+  }
+
+  /**
+   * Apply one session-roster pass to every conversation the board watches.
+   *
+   * Only watched cards are read: a card nobody opened has no session the Host
+   * promised to observe, which is what keeps an idle board from polling. A
+   * turn that started elsewhere still shows up here — the card reports 进行中
+   * while the roster says the session runs, and arms one unread result the
+   * moment it stops.
+   * @param items - roster entries the caller already read.
+   * @param now - observation instant.
+   * @returns whether any card changed.
+   */
+  observeConversations(items: readonly { sessionId: string; running: boolean }[], now = this.now()): boolean {
+    const watched = this.document.tasks.filter(task =>
+      task.archivedAt === undefined
+      && task.conversation !== undefined
+      && task.conversation.watchUntil !== undefined
+      && task.conversation.watchUntil > now)
+    if (watched.length === 0) return false
+    const byId = new Map(items.map(item => [item.sessionId, item]))
+    let changed = false
+    const next = new Map<string, TaskRecord>()
+    for (const task of watched) {
+      const entry = byId.get(task.conversation!.sessionId)
+      if (entry === undefined) continue
+      // A turn can only END if this board saw it running. Stamping an already
+      // idle card would rewrite its result instant on every pass — a card that
+      // looks like it produced a fresh result every five seconds.
+      if (!entry.running && task.conversation!.state !== 'running') continue
+      const updated = entry.running
+        ? withConversationRunning(task)
+        : withConversationAwaitingReview(withConversationTurnEnded(task, now))
+      if (updated === task) continue
+      next.set(task.id, { ...updated, updatedAt: now })
+      changed = true
+    }
+    if (!changed) return false
+    this.document.tasks = this.document.tasks.map(task => next.get(task.id) ?? task)
+    this.commit()
+    return true
   }
 
   allTasks(): readonly TaskRecord[] {
@@ -1371,6 +1421,27 @@ export class HostTaskLedger {
         // Fold whatever became ready in the same action: an ancestor whose last
         // member this closed leaves the running column with it.
         this.finalizeReadyRuns(false)
+        break
+      }
+      /**
+       * The user opened the card. Marking it read here is what makes the bell
+       * count only turns the user has not looked at; re-arming the watch window
+       * keeps this conversation observable while the user keeps talking in it.
+       */
+      case 'focus': {
+        const task = this.document.tasks.find(item => item.id === action.taskId)
+        if (task === undefined) throw new Error('task not found')
+        if (task.archivedAt !== undefined) throw new Error('archived task is read-only')
+        // A card that ran before the binding existed carries its session on the
+        // latest execution, so opening it binds that conversation instead of
+        // silently watching nothing.
+        const sessionId = task.conversation?.sessionId
+          ?? [...task.executions].reverse().find(entry => entry.sessionId !== undefined)?.sessionId
+        if (sessionId === undefined) return { state: this.state() }
+        const focused = withConversationFocus(withConversationSession(task, sessionId), now, CONVERSATION_WATCH_MS)
+        if (focused === task) return { state: this.state() }
+        this.document.tasks = this.document.tasks.map(item =>
+          item.id === action.taskId ? { ...focused, updatedAt: now } : item)
         break
       }
       case 'restore': {

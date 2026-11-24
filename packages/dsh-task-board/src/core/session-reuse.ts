@@ -74,7 +74,7 @@ export function reusableSessionId(
   idleSessionIds: ReadonlySet<string> | undefined,
   options: ReuseOptions = {},
 ): string | undefined {
-  if (options.force !== true && task.reuseSession !== true) return undefined
+  if (options.force !== true && task.reuseSession === false) return undefined
   if (idleSessionIds === undefined) return undefined
   const newest = newestSettledSessionId(task)
   if (newest === undefined) return undefined

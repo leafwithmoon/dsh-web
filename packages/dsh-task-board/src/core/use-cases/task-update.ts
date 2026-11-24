@@ -143,7 +143,7 @@ export function applyUpdateTask(
     }
     // Session reuse is a boolean opt-in; false (or an explicit null from a
     // caller that needs to clear it) returns the task to one session per run.
-    if ('reuseSession' in patch) next.reuseSession = patch.reuseSession === true ? true : undefined
+    if ('reuseSession' in patch) next.reuseSession = patch.reuseSession === false ? false : undefined
     if (workspaceId !== undefined || 'workspaceId' in patch) next.workspaceId = workspaceId
     if (mode !== undefined || 'mode' in patch) next.mode = mode
     if (permission !== undefined || 'permission' in patch) next.permission = permission

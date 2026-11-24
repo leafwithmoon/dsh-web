@@ -94,7 +94,9 @@ export function NewTaskModal({ controller, onClose, initialTask, defaultWorkspac
   // model IS the configured default model; '' follows the model/Host default.
   const [reasoningEffort, setReasoningEffort] = useState(seed.reasoningEffort)
   const inheritedPermission = parentTask === undefined ? undefined : effectiveTaskPermission(parentTask)
-  const [reuseSession, setReuseSession] = useState(initialTask?.reuseSession ?? false)
+  // Cards continue in the same conversation by default; an existing card keeps
+  // whatever it stored, so editing one never silently re-enables the reuse.
+  const [reuseSession, setReuseSession] = useState(initialTask === undefined ? true : initialTask.reuseSession !== false)
   // The providers' own create-time configuration. What each of them wants
   // written into the new card's `integrations` is held in a ref, not in state:
   // it is read once, when the card is created, so reporting a draft never
@@ -333,7 +335,7 @@ export function NewTaskModal({ controller, onClose, initialTask, defaultWorkspac
       ...(permission === '' ? {} : { permission: permission as TaskPermission }),
       ...(model === '' ? {} : { model }),
       ...(reasoningEffort === '' ? {} : { reasoningEffort }),
-      ...(reuseSession ? { reuseSession: true } : {}),
+      ...(reuseSession ? {} : { reuseSession: false }),
       ...(Object.keys(integrations).length === 0 ? {} : { integrations }),
       ...(tagList.length > 0 ? { tags: tagList } : {}),
       ...(attachments.persisted.length + uploaded.length > 0

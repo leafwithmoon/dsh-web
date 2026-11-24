@@ -7,7 +7,7 @@ import { isValidCron, isValidTimeZone, nextRunAtMs, resolveHostTimeZone } from '
 import { isTaskRecord, parseLedger } from './core/store.ts'
 import { DEFAULT_SPEND_BUDGET_TOKENS, spendCapMessage, spendCapReached } from './core/spend-budget.ts'
 import { usedTokensToday } from './host-spend.ts'
-import { CONVERSATION_WATCH_MS, canMoveManually, hasOpenExecution, withConversationAwaitingReview, retainRecentExecutions, scheduleExhausted, scheduleRunBudget, settleExecution, settledStatus, startExecution, withConversationFocus, withConversationRunning, withConversationSession, withConversationTurnEnded, withSchedule, withStatus, type ExecutionOutcome, type ExecutionRecord, type ExecutionRework, type ExecutionSummary, type ScheduleMode, type ScheduleStopReason, type TaskRecord } from './core/tasks.ts'
+import { CONVERSATION_WATCH_MS, canMoveManually, hasOpenExecution, withConversationAwaitingReview, withConversationTurnStarted, retainRecentExecutions, scheduleExhausted, scheduleRunBudget, settleExecution, settledStatus, startExecution, withConversationFocus, withConversationRunning, withConversationSession, withConversationTurnEnded, withSchedule, withStatus, type ExecutionOutcome, type ExecutionRecord, type ExecutionRework, type ExecutionSummary, type ScheduleMode, type ScheduleStopReason, type TaskRecord } from './core/tasks.ts'
 import {
   DEFAULT_SUBTASK_DEPTH,
   ancestorChain,
@@ -1215,8 +1215,8 @@ export class HostTaskLedger {
       // looks like it produced a fresh result every five seconds.
       if (!entry.running && task.conversation!.state !== 'running') continue
       const updated = entry.running
-        ? withConversationRunning(task)
-        : withConversationAwaitingReview(withConversationTurnEnded(task, now))
+        ? withConversationTurnStarted(task)
+        : withConversationAwaitingReview(withConversationTurnEnded(task, now, CONVERSATION_WATCH_MS))
       if (updated === task) continue
       next.set(task.id, { ...updated, updatedAt: now })
       changed = true

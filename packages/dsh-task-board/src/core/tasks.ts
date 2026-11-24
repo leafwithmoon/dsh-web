@@ -139,6 +139,20 @@ export function withConversationSession(task: TaskRecord, sessionId: string): Ta
   return { ...task, conversation: { ...previous, sessionId } }
 }
 
+/**
+ * The card follows its conversation into 进行中.
+ *
+ * This is the difference between a badge and a state: the user keeps talking in
+ * the card's session, so the card itself belongs in the running column for as
+ * long as that turn lasts — not just with a label on its old column.
+ */
+export function withConversationTurnStarted(task: TaskRecord): TaskRecord {
+  const next = withConversationRunning(task)
+  if (next.archivedAt !== undefined) return next
+  if (next.status === 'running') return next
+  return { ...next, status: 'running' }
+}
+
 /** Record that a watched conversation started a turn. */
 export function withConversationRunning(task: TaskRecord): TaskRecord {
   const conversation = task.conversation
@@ -153,11 +167,22 @@ export function withConversationRunning(task: TaskRecord): TaskRecord {
  * the end, and a conversation already stamped at or after it keeps its stamp —
  * two observers of one turn can never arm a second unread result.
  */
-export function withConversationTurnEnded(task: TaskRecord, at: number): TaskRecord {
+export function withConversationTurnEnded(task: TaskRecord, at: number, watchMs?: number): TaskRecord {
   const conversation = task.conversation
   if (conversation === undefined) return task
   if (conversation.turnEndedAt !== undefined && conversation.turnEndedAt >= at) return task
-  return { ...task, conversation: { ...conversation, state: 'idle', turnEndedAt: at } }
+  return {
+    ...task,
+    conversation: {
+      ...conversation,
+      state: 'idle',
+      turnEndedAt: at,
+      // A conversation that just produced a turn is still alive: extend the
+      // observation window so the NEXT round is caught too, without letting an
+      // abandoned card keep the roster poll awake forever.
+      ...(watchMs === undefined ? {} : { watchUntil: at + watchMs }),
+    },
+  }
 }
 
 /**

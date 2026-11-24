@@ -871,6 +871,11 @@ export function TaskDetail({ controller, task, phase = 'open' }: { controller: B
     }
   }
 
+  // The card's conversation: the session it is bound to, or the one its last
+  // execution ran in for a card written before the binding existed.
+  const conversationSessionId = current.conversation?.sessionId
+    ?? [...current.executions].reverse().find(entry => entry.sessionId !== undefined)?.sessionId
+
   return (
     <div className={css.modalBackdrop} data-state={phase} onMouseDown={dialog.onMouseDown}>
       <div ref={dialog.attach} className={css.detail} role="dialog" aria-modal="true" aria-label={t('detail.title')} tabIndex={-1}>
@@ -1078,6 +1083,16 @@ export function TaskDetail({ controller, task, phase = 'open' }: { controller: B
 
         <footer className={css.detailFooter}>
           {!archived && pending && <span className={css.detailMeta}>{t('board.pending')}…</span>}
+          {!archived && conversationSessionId !== undefined && (
+            <button
+              type="button"
+              className={css.ghostButton}
+              data-dsh-part="detail-open-conversation"
+              onClick={() => { controller.openSession(conversationSessionId) }}
+            >
+              {t('detail.openConversation')}
+            </button>
+          )}
           {!archived && canEditTaskContent(current) && (
             <button
               type="button"
